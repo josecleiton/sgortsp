@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"log"
@@ -15,7 +16,7 @@ func init() {
 
 func main() {
 	log.SetFlags(log.Lshortfile)
-	conf := &tls.Config{}
+	conf := &tls.Config{InsecureSkipVerify: true}
 	conn, err := tls.Dial("tcp", *addr, conf)
 	if err != nil {
 		log.Fatalln(err)
@@ -25,10 +26,20 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	buf := make([]byte, 100)
-	n, err = conn.Read(buf)
-	if err != nil {
-		log.Fatalln(err)
+	log.Printf("wrote %d bytes\n", n)
+	state := conn.ConnectionState()
+	for _, v := range state.PeerCertificates {
+		fmt.Println("Client: Server public key is:")
+		fmt.Println(x509.MarshalPKIXPublicKey(v.PublicKey))
 	}
-	fmt.Println(string(buf[:n]))
+	log.Println("Client: handshake: ", state.HandshakeComplete)
+	log.Println("Client: mutual: ", state.NegotiatedProtocolIsMutual)
+	log.Println(state.NegotiatedProtocol)
+	log.Println(state)
+	// buf := make([]byte, 100)
+	// n, err = conn.Read(buf)
+	// if err != nil {
+	// 	log.Fatalln(err)
+	// }
+	// fmt.Println(string(buf[:n]))
 }

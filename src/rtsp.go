@@ -9,6 +9,13 @@ import (
 	"strings"
 )
 
+// RTSP main type
+// Manage Requests/Responses and Sessions
+type RTSP struct {
+	sessions map[string]Session
+	Router
+}
+
 const (
 	CRLF    = "\r\n"
 	VERSION = "RTSP/2.0"
@@ -23,12 +30,6 @@ const (
 var reqMethods = map[string]bool{"PLAY": true}
 var crt, key = flag.String("crt", "server.crt", "tls crt path"), flag.String("key", "server.key", "tls key path")
 var port = flag.String("p", "9090", ":PORT")
-
-// RTSP main type
-// Manage Requests/Responses and Sessions
-type RTSP struct {
-	sessions map[string]Session
-}
 
 func init() {
 	flag.Parse()
@@ -55,7 +56,13 @@ func (sv *RTSP) listen() {
 			log.Println(err)
 			continue
 		}
-		go sv.handleConn(conn)
+		go sv.handShake(conn)
+		// go func() {
+		// 	s := bufio.NewScanner(conn)
+		// 	for s.Scan() {
+		// 		log.Println(s.Text())
+		// 	}
+		// }()
 	}
 }
 
@@ -67,12 +74,14 @@ func (sv *RTSP) setupTLS() *tls.Config {
 	return &tls.Config{Certificates: []tls.Certificate{cer}}
 }
 
-func (sv *RTSP) handleConn(conn net.Conn) {
-	sv.parser(conn)
+func (sv *RTSP) handShake(conn net.Conn) {
+	sv.parse(bufio.NewScanner(conn))
 }
 
-func (sv *RTSP) parser(conn net.Conn) int {
-	s := bufio.NewScanner(conn)
+func (sv *RTSP) handleConn(conn net.Conn) {
+}
+
+func (sv *RTSP) parse(s *bufio.Scanner) int {
 	i := -1
 	msgtype := UNDEFINED
 	msgbody := false
@@ -103,6 +112,10 @@ func (sv *RTSP) parser(conn net.Conn) int {
 			}
 			if reqMethods[tokens[0]] {
 				msgtype = REQUEST
+				path, err := sv.Router.Parse(tokens[1])
+				if err != nil {
+					// send 410 (gone)
+				}
 				if tokens[2] != VERSION {
 					// send 400 (bad request)
 				}
