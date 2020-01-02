@@ -3,9 +3,9 @@ package sgortsp
 import (
 	"bufio"
 	"crypto/tls"
+	"flag"
 	"log"
 	"net"
-	"os"
 	"strings"
 )
 
@@ -21,11 +21,17 @@ const (
 )
 
 var reqMethods = map[string]bool{"PLAY": true}
+var crt, key = flag.String("crt", "server.crt", "tls crt path"), flag.String("key", "server.key", "tls key path")
+var port = flag.String("p", "9090", ":PORT")
 
 // RTSP main type
 // Manage Requests/Responses and Sessions
 type RTSP struct {
 	sessions map[string]Session
+}
+
+func init() {
+	flag.Parse()
 }
 
 // RTSP Initializer
@@ -35,9 +41,9 @@ func (sv *RTSP) Init() {
 }
 
 func (sv *RTSP) listen() {
-	port := sv.setupPort()
+	port := *port
 	config := sv.setupTLS()
-	ln, err := tls.Listen("tcp", port, config)
+	ln, err := tls.Listen("tcp", ":"+port, config)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -53,16 +59,8 @@ func (sv *RTSP) listen() {
 	}
 }
 
-func (sv *RTSP) setupPort() string {
-	port := ":9090"
-	if len(os.Args) > 1 {
-		port = ":" + os.Args[1]
-	}
-	return port
-}
-
 func (sv *RTSP) setupTLS() *tls.Config {
-	cer, err := tls.LoadX509KeyPair("server.crt", "server.key")
+	cer, err := tls.LoadX509KeyPair(*crt, *key)
 	if err != nil {
 		log.Fatalln(err)
 	}
