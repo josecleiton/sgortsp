@@ -3,9 +3,11 @@ package sgortsp
 import (
 	"bufio"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -31,9 +33,11 @@ const (
 	BADREQUEST = 402
 )
 
-var reqMethods = map[string]bool{"PLAY": true, "OPTIONS": true, "DESCRIBE": true, "PAUSE": true, "TEARDOWN": true}
-var crt, key = flag.String("crt", "server.crt", "tls crt path"), flag.String("key", "server.key", "tls key path")
-var port = flag.String("p", "9090", ":PORT")
+var (
+	reqMethods = map[string]bool{"PLAY": true, "OPTIONS": true, "DESCRIBE": true, "PAUSE": true, "TEARDOWN": true}
+	crt, key   = flag.String("crt", "server.crt", "tls crt path"), flag.String("key", "server.key", "tls key path")
+	port       = flag.String("p", "9090", ":PORT")
+)
 
 func init() {
 	flag.Parse()
@@ -81,30 +85,66 @@ func (sv *RTSP) setupTLS() *tls.Config {
 }
 
 func (sv *RTSP) handShake(conn net.Conn) {
-	desc, err := sv.parse(conn)
-	if err != nil {
+	req, resp, err := sv.parse(conn)
+	if req != nil {
+		log.Println(req)
+		if err != nil {
+			sv.sendResponse(conn, &req.Message, err.Error())
+			return
+		}
+		go sv.handleSession(conn, req)
+		// createSessionAndListen
+	} else {
+		log.Println("Received a response:", resp)
+	}
+}
+
+func (sv *RTSP) sendResponse(conn net.Conn, msg *Message, s string) error {
+	s += CRLF
+	toAppHeaders := []string{"Cseq", "Session"}
+	for _, h := range toAppHeaders {
+		if v, ok := msg.headers[h]; ok {
+			s += h + ": " + v + CRLF
+		}
+	}
+	_, err := conn.Write([]byte(s))
+	return err
+}
+
+func (sv *RTSP) handleSession(conn net.Conn, req *Request) {
+	defer conn.Close()
+	session := Session{}
+	transportHeader := req.headers["Transport"]
+	if err := session.Init(transportHeader); err != nil {
+		// response 500
+		log.Println(err)
 		return
 	}
-	if desc == REQUEST {
-	} else {
-		// go sv.handleConn(conn)
+	req.AppendHeader("Session", session.id)
+	err := sv.sendResponse(conn, &req.Message, OK)
+	if err != nil {
+		log.Println(err)
+		return
 	}
-	desc++
-}
-
-func (sv *RTSP) handleConn(conn net.Conn) {
 	for {
-
+		select {
+		default:
+			break
+		}
+		//send rtp packets using udp conn (session.conn)
 	}
 }
 
-func (sv *RTSP) parse(conn net.Conn) (int, error) {
+func (sv *RTSP) parse(conn net.Conn) (*Request, *Response, error) {
+	var (
+		req         *Request
+		resp        *Response
+		msg         *Message
+		returnError error
+	)
 	s := bufio.NewScanner(conn)
 	i := 0
-	msgtype := UNDEFINED
 	msgbody := false
-	body := ""
-	headers := make(map[string]string, 5)
 	for s.Scan() {
 		line := s.Text()
 		if i == 0 && len(line) != 0 {
@@ -114,31 +154,46 @@ func (sv *RTSP) parse(conn net.Conn) (int, error) {
 			if len(tokens) != 3 {
 				// send 400 (bad request)
 				log.Println("STATUS_LINE - 402 Bad request", tokens)
+				returnError = errors.New(BadRequest)
 			}
 			method, uri, version := strings.ToUpper(tokens[0]), tokens[1], tokens[2]
 			if reqMethods[method] {
-				msgtype = REQUEST
 				path, err := sv.Router.Parse(uri)
-				if err != nil || path == nil {
+				if (err != nil || path == nil) && returnError == nil {
 					// send 410 (gone)
-					log.Println("410 GONE")
+					returnError = errors.New(NotFound)
 				}
 				if version != VERSION {
 					// send 400 (bad request)
 					log.Println("VERSION - 402 Bad request")
 				}
+				req = &Request{method: method, resource: path}
+				msg = &req.Message
 			} else {
-				msgtype = RESPONSE
+				version, phrase := tokens[0], tokens[2]
+				if version != VERSION {
+					log.Println("VERSION - 402 Bad request")
+					// return nil, nil, errors.New(VersionNotSupported)
+				}
+				status, err := strconv.Atoi(tokens[1])
+				if err != nil && returnError == nil {
+					log.Println("Status code MUST be a integer")
+					returnError = errors.New(BadRequest)
+				}
+				log.Printf("Response: %d - %s\n", status, phrase)
+				resp = &Response{status: status}
+				msg = &resp.Message
 			}
 			i++
 		} else if i != 0 {
-			log.Println(line, "WOW")
 			if !msgbody {
 				sz := len(line)
 				if sz == 0 {
 					break
 				}
 				// get header's line description and assign that to headers map
+				line = strings.ReplaceAll(line, "\t", "")
+				line = strings.Trim(line, " ")
 				idx := strings.IndexRune(line, ':')
 				if idx == -1 || idx+2 >= sz {
 					// invalid header, ignore it
@@ -146,18 +201,15 @@ func (sv *RTSP) parse(conn net.Conn) (int, error) {
 				}
 				key, value := line[:idx], line[idx+2:]
 				// log.Printf("line: %s / %s -> %s\n", line, key, value)
-				headers[key] = strings.Trim(value, " ")
+				msg.AppendHeader(key, value)
 			} else {
-				log.Println("body", body)
-				body += line
+				msg.AppendToBody(line)
 			}
 			i++
 		}
 	}
-	log.Println("headers", headers)
-	return msgtype, nil
-}
-func (sv *RTSP) sendError() {
+	log.Println("headers", msg.headers)
+	return req, resp, returnError
 }
 
 // RTSP dealloc
