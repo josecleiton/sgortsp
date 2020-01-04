@@ -17,7 +17,7 @@ type Session struct {
 type transport struct {
 	casttype, state int
 	addrs           []*net.UDPAddr
-	conns           []*net.UDPConn
+	conns           map[int]*net.UDPConn
 }
 
 const (
@@ -117,19 +117,22 @@ transportLine:
 }
 
 func (Session) connectToTransport(local *net.UDPAddr, trs *[]transport) int {
-	i := 0
+	count := 0
 	for _, t := range *trs {
-		for _, addr := range t.addrs {
+		if t.conns == nil {
+			t.conns = make(map[int]*net.UDPConn, len(t.addrs))
+		}
+		for i, addr := range t.addrs {
 			conn, err := net.DialUDP("udp", local, addr)
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-			t.conns = append(t.conns, conn)
-			i++
+			t.conns[i] = conn
+			count++
 		}
 	}
-	return i
+	return count
 }
 
 func (Session) parseDestAddr(destaddr string) []*net.UDPAddr {
@@ -141,4 +144,7 @@ func (Session) parseDestAddr(destaddr string) []*net.UDPAddr {
 		}
 	}
 	return result
+}
+
+func (s *Session) Send() {
 }

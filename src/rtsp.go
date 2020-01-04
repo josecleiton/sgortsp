@@ -114,24 +114,27 @@ func (sv *RTSP) sendResponse(conn net.Conn, msg *Message, s string) error {
 func (sv *RTSP) handleSession(conn net.Conn, req *Request) {
 	defer conn.Close()
 	session := Session{}
-	transportHeader := req.headers["Transport"]
-	if err := session.Init(transportHeader); err != nil {
+	if err := session.Init(req.headers["Transport"]); err != nil {
 		// response 500
 		log.Println(err)
 		return
 	}
 	req.AppendHeader("Session", session.id)
-	err := sv.sendResponse(conn, &req.Message, OK)
-	if err != nil {
+	if err := sv.sendResponse(conn, &req.Message, OK); err != nil {
 		log.Println(err)
 		return
 	}
+	quit := make(chan bool)
+handleConn:
 	for {
 		select {
+		case <-quit:
+			break handleConn
 		default:
 			break
 		}
 		//send rtp packets using udp conn (session.conn)
+		session.Send()
 	}
 }
 
