@@ -30,8 +30,8 @@ const (
 )
 
 type Message struct {
-	body    string
-	headers map[string]string
+	body, version string
+	headers       map[string]string
 }
 
 type Msg interface {

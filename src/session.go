@@ -50,7 +50,7 @@ func (s *Session) Init(transp string) error {
 		// parse transport
 		// get ip:port
 		// set s.conn to that addr (use connError)
-		localAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1")
+		localAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:40400")
 		if err != nil {
 			log.Println(err)
 		} else {
@@ -111,7 +111,12 @@ transportLine:
 		if !ok {
 			continue transportLine
 		}
-		transports = append(transports, transport{transpUnicast, state, addrs, nil})
+		transports = append(transports, transport{
+			casttype: transpUnicast,
+			state:    state,
+			addrs:    addrs,
+			conns:    nil,
+		})
 	}
 	return transports
 }
@@ -147,4 +152,5 @@ func (Session) parseDestAddr(destaddr string) []*net.UDPAddr {
 }
 
 func (s *Session) Send() {
+	log.Println("SENDING PACKET...")
 }

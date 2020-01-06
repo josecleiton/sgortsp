@@ -18,22 +18,22 @@ func (r *Router) Init() {
 
 func (r *Router) Parse(uri string) (*routes.Resource, error) {
 	proute := ""
-	// log.Println("uri", uri, ok)
 	if ok := strings.HasPrefix(uri, "rtsp://"); !ok {
 		return nil, errors.New("Bad URI")
 	}
 	for i, v := range uri {
 		if v == '/' && i > 6 {
-			proute = uri[i:]
+			proute = uri[i+1:]
 			break
 		}
 	}
 	if proute == "" {
-		return nil, errors.New("Bad URI")
+		proute = "/"
+	} else {
+		proute = strings.TrimSuffix(proute, "/")
 	}
 	if rt := r.routes[proute]; rt != nil {
 		return rt, nil
-	} else {
-		return rt, errors.New("Route doesn't exists")
 	}
+	return nil, errors.New("Route doesn't exists")
 }

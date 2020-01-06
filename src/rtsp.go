@@ -5,10 +5,14 @@ import (
 	"crypto/tls"
 	"errors"
 	"flag"
+	"fmt"
+	"github.com/josecleiton/sgortsp/src/routes"
 	"log"
+	"math/rand"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // RTSP main type
@@ -29,14 +33,12 @@ const (
 	RESPONSE
 )
 
-const (
-	BADREQUEST = 402
-)
-
 var (
 	reqMethods = map[string]bool{"PLAY": true, "OPTIONS": true, "DESCRIBE": true, "PAUSE": true, "TEARDOWN": true}
 	crt, key   = flag.String("crt", "server.crt", "tls crt path"), flag.String("key", "server.key", "tls key path")
 	port       = flag.String("p", "9090", ":PORT")
+	serverName = flag.String("server", "RTSP Server", "server name")
+	UdpPort    = flag.String("udp", "47000", "rtp packet port")
 )
 
 func init() {
@@ -85,30 +87,96 @@ func (sv *RTSP) setupTLS() *tls.Config {
 }
 
 func (sv *RTSP) handShake(conn net.Conn) {
-	req, resp, err := sv.parse(conn)
-	if req != nil {
-		log.Println(req)
-		if err != nil {
-			sv.sendResponse(conn, &req.Message, err.Error())
+	// states
+	caught := false
+	for !caught {
+		req, resp, err := sv.parse(conn)
+		if req == nil {
+			log.Println("Received a response:", resp)
 			return
 		}
-		go sv.handleSession(conn, req)
-		// createSessionAndListen
-	} else {
-		log.Println("Received a response:", resp)
+		if err != nil {
+			sv.sendResponse(conn, &req.Message, err.Error(), "", nil)
+			return
+		}
+		switch req.method {
+		case "SETUP":
+			sv.handleSession(conn, req)
+			caught = true
+		case "OPTIONS":
+			sv.handleOptions(conn, req)
+		case "DESCRIBE":
+			sv.handleDescribe(conn, req)
+		default:
+			log.Println("req", *req)
+			log.Println(MethodNotAllowed)
+		}
 	}
 }
 
-func (sv *RTSP) sendResponse(conn net.Conn, msg *Message, s string) error {
-	s += CRLF
-	toAppHeaders := []string{"Cseq", "Session"}
-	for _, h := range toAppHeaders {
-		if v, ok := msg.headers[h]; ok {
-			s += h + ": " + v + CRLF
+func (RTSP) formatMsgBody(res *routes.Resource) string {
+	if res == nil {
+		return ""
+	}
+	var body string
+	descriptors := []*[]routes.PairString{&res.Session, &res.Time, &res.Media}
+	for _, descriptor := range descriptors {
+		for _, desc := range *descriptor {
+			switch desc.First {
+			case "o":
+				desc.Second = fmt.Sprintf(desc.Second, rand.Int(), rand.Int())
+			case "m":
+				desc.Second = fmt.Sprintf(desc.Second, *UdpPort)
+			default:
+				break
+			}
+			body += desc.First + "=" + desc.Second + CRLF
 		}
 	}
-	_, err := conn.Write([]byte(s))
+	if body != "" {
+		body += CRLF
+	}
+	return body
+}
+
+func (*RTSP) sendResponse(conn net.Conn, msg *Message,
+	statusLine, body string, moreHeaders map[string]string) error {
+
+	response := statusLine + CRLF
+	toAppHeaders := []string{"CSeq", "Session"}
+	for _, h := range toAppHeaders {
+		if v, ok := msg.headers[h]; ok {
+			response += h + ": " + v + CRLF
+		}
+	}
+	for k, v := range moreHeaders {
+		response += k + ": " + v + CRLF
+	}
+	response += CRLF + body
+	log.Printf("sendResponse:\n%s\n", response)
+	_, err := conn.Write([]byte(response))
 	return err
+}
+
+func (sv *RTSP) handleOptions(conn net.Conn, req *Request) error {
+	headers := map[string]string{
+		"Public":    "SETUP, TEARDOWN, PLAY, PAUSE, OPTIONS, DESCRIBE",
+		"Supported": "play.basic",
+		"Server":    *serverName,
+	}
+	statusLine := sv.formatStatusLine(req.version, OK)
+	return sv.sendResponse(conn, &req.Message, statusLine, "", headers)
+}
+func (sv *RTSP) handleDescribe(conn net.Conn, req *Request) error {
+	headers := map[string]string{
+		"Server":       *serverName,
+		"Content-Type": "application/sdp",
+		"Content-Base": req.resource.Path,
+	}
+	statusLine := sv.formatStatusLine(req.version, OK)
+	body := sv.formatMsgBody(req.resource)
+	headers["Content-Length"] = strconv.Itoa(len(body))
+	return sv.sendResponse(conn, &req.Message, statusLine, body, headers)
 }
 
 func (sv *RTSP) handleSession(conn net.Conn, req *Request) {
@@ -120,22 +188,67 @@ func (sv *RTSP) handleSession(conn net.Conn, req *Request) {
 		return
 	}
 	req.AppendHeader("Session", session.id)
-	if err := sv.sendResponse(conn, &req.Message, OK); err != nil {
+	if err := sv.sendResponse(conn, &req.Message, OK, "", nil); err != nil {
 		log.Println(err)
 		return
 	}
-	quit := make(chan bool)
-handleConn:
-	for {
-		select {
-		case <-quit:
-			break handleConn
-		default:
-			break
+	play, pause, teardown := make(chan bool), make(chan bool), make(chan bool)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for {
+			req, resp, err := sv.parse(conn)
+			if err != nil {
+				log.Println("handleSession goro 1:", err)
+				continue
+			}
+			if req != nil {
+				switch req.method {
+				case "PLAY":
+					play <- true
+				case "PAUSE":
+					pause <- true
+				case "TEARDOWN":
+					teardown <- true
+					return
+				default:
+					break
+				}
+			}
+			if resp != nil {
+				if resp.status != 200 {
+					log.Println(*resp)
+					teardown <- true
+				}
+			}
 		}
-		//send rtp packets using udp conn (session.conn)
-		session.Send()
-	}
+	}()
+	go func(send bool) {
+		defer wg.Done()
+	UDPLoop:
+		for {
+			select {
+			case <-play:
+				send = true
+				break
+			case <-pause:
+				send = false
+			case <-teardown:
+				break UDPLoop
+			default:
+				break
+			}
+			if send {
+				session.Send()
+			}
+		}
+	}(req.method == "PLAY")
+	wg.Wait()
+}
+
+func (RTSP) formatStatusLine(v string, phrase string) string {
+	return v + " " + phrase
 }
 
 func (sv *RTSP) parse(conn net.Conn) (*Request, *Response, error) {
@@ -148,8 +261,10 @@ func (sv *RTSP) parse(conn net.Conn) (*Request, *Response, error) {
 	s := bufio.NewScanner(conn)
 	i := 0
 	msgbody := false
+	version := VERSION
 	for s.Scan() {
 		line := s.Text()
+		log.Println("line:", line)
 		if i == 0 && len(line) != 0 {
 			// Request: method uri version
 			// Response: version status-code phrase
@@ -157,14 +272,16 @@ func (sv *RTSP) parse(conn net.Conn) (*Request, *Response, error) {
 			if len(tokens) != 3 {
 				// send 400 (bad request)
 				log.Println("STATUS_LINE - 402 Bad request", tokens)
-				returnError = errors.New(BadRequest)
+				returnError = errors.New(sv.formatStatusLine(version, BadRequest))
 			}
-			method, uri, version := strings.ToUpper(tokens[0]), tokens[1], tokens[2]
+			method, uri := strings.ToUpper(tokens[0]), tokens[1]
+			version = tokens[2]
 			if reqMethods[method] {
 				path, err := sv.Router.Parse(uri)
+				log.Println("path", path)
 				if (err != nil || path == nil) && returnError == nil {
 					// send 410 (gone)
-					returnError = errors.New(NotFound)
+					returnError = errors.New(sv.formatStatusLine(version, NotFound))
 				}
 				if version != VERSION {
 					// send 400 (bad request)
@@ -181,12 +298,13 @@ func (sv *RTSP) parse(conn net.Conn) (*Request, *Response, error) {
 				status, err := strconv.Atoi(tokens[1])
 				if err != nil && returnError == nil {
 					log.Println("Status code MUST be a integer")
-					returnError = errors.New(BadRequest)
+					returnError = errors.New(sv.formatStatusLine(version, BadRequest))
 				}
 				log.Printf("Response: %d - %s\n", status, phrase)
 				resp = &Response{status: status}
 				msg = &resp.Message
 			}
+			msg.version = version
 			i++
 		} else if i != 0 {
 			if !msgbody {
@@ -211,7 +329,7 @@ func (sv *RTSP) parse(conn net.Conn) (*Request, *Response, error) {
 			i++
 		}
 	}
-	log.Println("headers", msg.headers)
+	// log.Println("headers", msg.headers)
 	return req, resp, returnError
 }
 
