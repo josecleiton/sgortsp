@@ -3,6 +3,7 @@ package sgortsp
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -10,19 +11,24 @@ import (
 )
 
 type Session struct {
-	id string
-	tr []transport
+	id, ip string
+	tr     []transport
 }
 
 type transport struct {
 	casttype, state int
-	addrs           []*net.UDPAddr
-	conns           map[int]*net.UDPConn
+	ports           []string
+	conn            *net.UDPConn
+	// addrs           []*net.UDPAddr
 }
 
 const (
 	transpUnicast = iota
 	transpMulticast
+)
+
+const (
+	ServerPort = "40400"
 )
 
 const (
@@ -37,10 +43,16 @@ var (
 	methodMap = map[string]int{"PLAY": play, "PAUSE": pause, "DESCRIBE": describe, "OPTIONS": options, "TEARDOWN": teardown}
 )
 
-func (s *Session) Init(transp string) error {
+func (s *Session) Init(a net.Addr, transp string) error {
 	var (
 		idError, connError error
 	)
+	remoteAddr, ok := a.(*net.TCPAddr)
+	if !ok {
+		return errors.New("Session init: malformed remoteaddr")
+	}
+	s.ip = remoteAddr.IP.String()
+	log.Println("session ip:", s.ip)
 	done := make(chan bool)
 	go func() {
 		idError = s.createID()
@@ -50,12 +62,13 @@ func (s *Session) Init(transp string) error {
 		// parse transport
 		// get ip:port
 		// set s.conn to that addr (use connError)
-		localAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:40400")
+		localAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+ServerPort)
 		if err != nil {
 			log.Println(err)
 		} else {
-			trs := s.parseTransport(transp)
-			s.connectToTransport(localAddr, &trs)
+			s.tr = s.ParseTransport(transp)
+			s.connectToTransport(localAddr, &s.tr)
+			log.Println("session:", *s)
 		}
 		connError = err
 		done <- true
@@ -77,10 +90,10 @@ func (s *Session) createID() error {
 	return nil
 }
 
-func (s *Session) parseTransport(transp string) []transport {
+func (s *Session) ParseTransport(transp string) []transport {
 	transp = strings.ReplaceAll(transp, "\r\n", "")
 	// MUST IMPLEMENT : MULTICAST
-	requiredFields := []string{"RTP/ATP", "mode", "unicast", "dest_addr"}
+	requiredFields := []string{"RTP/AVP/UDP", "unicast", "client_port"}
 	var (
 		transports []transport
 	)
@@ -89,13 +102,7 @@ transportLine:
 		options := make(map[string]string, 5)
 		for _, tk := range strings.Split(str, ";") {
 			if idx := strings.IndexRune(tk, '='); idx != -1 {
-				var (
-					key   string = tk[idx:]
-					value string
-				)
-				if idx+1 < len(tk) {
-					value = tk[:idx+1]
-				}
+				key, value := tk[:idx], tk[idx+1:]
 				options[key] = value
 			} else {
 				options[tk] = ""
@@ -106,51 +113,67 @@ transportLine:
 				continue transportLine
 			}
 		}
-		addrs := s.parseDestAddr(options["dest_addr"])
-		state, ok := methodMap[options["mode"]]
+		ports := s.parseClientPort(options["client_port"])
+		state, ok := methodMap[strings.ToUpper(options["mode"])]
 		if !ok {
-			continue transportLine
+			state = methodMap["PLAY"]
 		}
 		transports = append(transports, transport{
 			casttype: transpUnicast,
 			state:    state,
-			addrs:    addrs,
-			conns:    nil,
+			ports:    ports,
+			conn:     nil,
 		})
 	}
 	return transports
 }
 
-func (Session) connectToTransport(local *net.UDPAddr, trs *[]transport) int {
+func (s *Session) connectToTransport(local *net.UDPAddr, trs *[]transport) int {
 	count := 0
-	for _, t := range *trs {
-		if t.conns == nil {
-			t.conns = make(map[int]*net.UDPConn, len(t.addrs))
-		}
-		for i, addr := range t.addrs {
-			conn, err := net.DialUDP("udp", local, addr)
+	for i, t := range *trs {
+		for _, port := range t.ports {
+			remote, err := net.ResolveUDPAddr("udp", s.ip+":"+port)
 			if err != nil {
-				log.Println(err)
+				log.Println("connectToTransport:", err)
+				count++
 				continue
 			}
-			t.conns[i] = conn
+			conn, err := net.DialUDP("udp", local, remote)
+			if err == nil {
+				(*trs)[i].conn = conn
+				break
+			}
+			log.Println(err)
 			count++
 		}
 	}
+	// log.Println(trs)
 	return count
 }
 
-func (Session) parseDestAddr(destaddr string) []*net.UDPAddr {
+func (Session) parseClientPort(clientport string) []string {
+	ports := make([]string, 0, 2)
+	if idx := strings.IndexRune(clientport, '-'); idx != -1 {
+		ports = append(ports, clientport[:idx], clientport[idx+1:])
+	} else {
+		ports = append(ports, clientport)
+	}
+	return ports
+}
+
+func (s *Session) parseDestAddr(destaddr string) []*net.UDPAddr {
 	var result []*net.UDPAddr
-	for _, rawAddr := range strings.Split(destaddr, "/") {
-		rawAddr = strings.ReplaceAll(rawAddr, "\"", "")
-		if addr, err := net.ResolveUDPAddr("udp", rawAddr); err == nil {
-			result = append(result, addr)
+	for _, rawPort := range strings.Split(destaddr, "-") {
+		addr, err := net.ResolveUDPAddr("udp", s.ip+":"+rawPort)
+		if err != nil {
+			log.Println("parseDestAddr:", err)
+			continue
 		}
+		result = append(result, addr)
 	}
 	return result
 }
 
 func (s *Session) Send() {
-	log.Println("SENDING PACKET...")
+	log.Println("SENDING PACKET...", s)
 }

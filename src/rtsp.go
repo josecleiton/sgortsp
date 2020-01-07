@@ -24,7 +24,7 @@ type RTSP struct {
 
 const (
 	CRLF    = "\r\n"
-	VERSION = "RTSP/2.0"
+	VERSION = "RTSP/1.0"
 )
 
 const (
@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	reqMethods = map[string]bool{"PLAY": true, "OPTIONS": true, "DESCRIBE": true, "PAUSE": true, "TEARDOWN": true}
+	reqMethods = map[string]bool{"SETUP": true, "PLAY": true, "OPTIONS": true, "DESCRIBE": true, "PAUSE": true, "TEARDOWN": true}
 	crt, key   = flag.String("crt", "server.crt", "tls crt path"), flag.String("key", "server.key", "tls key path")
 	port       = flag.String("p", "9090", ":PORT")
 	serverName = flag.String("server", "RTSP Server", "server name")
@@ -101,7 +101,7 @@ func (sv *RTSP) handShake(conn net.Conn) {
 		}
 		switch req.method {
 		case "SETUP":
-			sv.handleSession(conn, req)
+			sv.handleSetup(conn, req)
 			caught = true
 		case "OPTIONS":
 			sv.handleOptions(conn, req)
@@ -171,7 +171,7 @@ func (sv *RTSP) handleDescribe(conn net.Conn, req *Request) error {
 	headers := map[string]string{
 		"Server":       *serverName,
 		"Content-Type": "application/sdp",
-		"Content-Base": req.resource.Path,
+		"Content-Base": req.uri,
 	}
 	statusLine := sv.formatStatusLine(req.version, OK)
 	body := sv.formatMsgBody(req.resource)
@@ -179,19 +179,28 @@ func (sv *RTSP) handleDescribe(conn net.Conn, req *Request) error {
 	return sv.sendResponse(conn, &req.Message, statusLine, body, headers)
 }
 
-func (sv *RTSP) handleSession(conn net.Conn, req *Request) {
+func (sv *RTSP) handleSetup(conn net.Conn, req *Request) {
 	defer conn.Close()
 	session := Session{}
-	if err := session.Init(req.headers["Transport"]); err != nil {
+	remoteAddr := conn.RemoteAddr()
+	if err := session.Init(remoteAddr, req.headers["Transport"]); err != nil {
 		// response 500
 		log.Println(err)
 		return
 	}
+	// log.Println("Session:", session.id)
 	req.AppendHeader("Session", session.id)
-	if err := sv.sendResponse(conn, &req.Message, OK, "", nil); err != nil {
+	statusLine := sv.formatStatusLine(req.version, OK)
+	transport := sv.formatTransport(req.headers["Transport"])
+	headers := map[string]string{
+		"Server": *serverName, "Accept-Ranges": "npt",
+		"Media-Properties": "", "Transport": transport,
+	}
+	if err := sv.sendResponse(conn, &req.Message, statusLine, "", headers); err != nil {
 		log.Println(err)
 		return
 	}
+	log.Println("session", session)
 	play, pause, teardown := make(chan bool), make(chan bool), make(chan bool)
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -251,6 +260,10 @@ func (RTSP) formatStatusLine(v string, phrase string) string {
 	return v + " " + phrase
 }
 
+func (RTSP) formatTransport(transp string) string {
+	return transp + ";server_port=" + ServerPort + ";mode=PLAY"
+}
+
 func (sv *RTSP) parse(conn net.Conn) (*Request, *Response, error) {
 	var (
 		req         *Request
@@ -287,7 +300,7 @@ func (sv *RTSP) parse(conn net.Conn) (*Request, *Response, error) {
 					// send 400 (bad request)
 					log.Println("VERSION - 402 Bad request")
 				}
-				req = &Request{method: method, resource: path}
+				req = &Request{method: method, uri: uri, resource: path}
 				msg = &req.Message
 			} else {
 				version, phrase := tokens[0], tokens[2]

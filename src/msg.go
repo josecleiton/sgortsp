@@ -41,8 +41,8 @@ type Msg interface {
 
 type Request struct {
 	Message
-	method   string
-	resource *routes.Resource
+	method, uri string
+	resource    *routes.Resource
 }
 
 type Response struct {
