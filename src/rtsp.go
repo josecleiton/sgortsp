@@ -184,7 +184,6 @@ func (sv *RTSP) handleDescribe(conn net.Conn, req *Request) error {
 }
 
 func (sv *RTSP) handleSetup(conn net.Conn, req *Request) {
-	defer conn.Close()
 	session := Session{}
 	remoteAddr := conn.RemoteAddr()
 	if err := session.Init(remoteAddr, req.headers["Transport"]); err != nil {
