@@ -8,17 +8,20 @@ import (
 	"log"
 	"net"
 	"strings"
+	"time"
 )
 
 type Session struct {
 	id, ip string
 	tr     []transport
+	File   Streamer
 }
 
 type transport struct {
 	casttype, state int
 	ports           []string
 	conn            *net.UDPConn
+	Rtp             RTP
 	// addrs           []*net.UDPAddr
 }
 
@@ -75,6 +78,9 @@ func (s *Session) Init(a net.Addr, transp string) error {
 	}()
 	<-done
 	<-done
+	if len(s.tr) == 0 {
+		return errors.New("None transport available")
+	}
 	if idError != nil {
 		return idError
 	}
@@ -93,7 +99,7 @@ func (s *Session) createID() error {
 func (s *Session) ParseTransport(transp string) []transport {
 	transp = strings.ReplaceAll(transp, "\r\n", "")
 	// MUST IMPLEMENT : MULTICAST
-	requiredFields := []string{"RTP/AVP/UDP", "unicast", "client_port"}
+	requiredFields := []string{"unicast", "client_port"}
 	var (
 		transports []transport
 	)
@@ -101,19 +107,33 @@ transportLine:
 	for _, str := range strings.Split(transp, ",") {
 		options := make(map[string]string, 5)
 		for _, tk := range strings.Split(str, ";") {
+			tk = strings.Trim(tk, " ")
 			if idx := strings.IndexRune(tk, '='); idx != -1 {
 				key, value := tk[:idx], tk[idx+1:]
 				options[key] = value
+				log.Printf("%s-%s\n", key, value)
 			} else {
 				options[tk] = ""
 			}
 		}
+		types := []string{"RTP/AVP", "RTP/AVP/UDP", "RTP/UDP"}
+		exists := false
+		for _, t := range types {
+			if _, ok := options[t]; ok {
+				exists = true
+			}
+		}
+		if !exists {
+			continue transportLine
+		}
 		for _, req := range requiredFields {
 			if _, ok := options[req]; !ok {
+				log.Println("FAILED", req, options[req])
 				continue transportLine
 			}
 		}
 		ports := s.parseClientPort(options["client_port"])
+		log.Println("ports", ports)
 		state, ok := methodMap[strings.ToUpper(options["mode"])]
 		if !ok {
 			state = methodMap["PLAY"]
@@ -130,6 +150,7 @@ transportLine:
 
 func (s *Session) connectToTransport(local *net.UDPAddr, trs *[]transport) int {
 	count := 0
+	log.Println("trans", *trs)
 	for i, t := range *trs {
 		for _, port := range t.ports {
 			remote, err := net.ResolveUDPAddr("udp", s.ip+":"+port)
@@ -158,6 +179,7 @@ func (Session) parseClientPort(clientport string) []string {
 	} else {
 		ports = append(ports, clientport)
 	}
+	log.Println("ports", ports)
 	return ports
 }
 
@@ -174,6 +196,23 @@ func (s *Session) parseDestAddr(destaddr string) []*net.UDPAddr {
 	return result
 }
 
-func (s *Session) Send() {
-	log.Println("SENDING PACKET...", s)
+func (s *Session) Send() error {
+	// log.Println(s.tr)
+	if s.File.FrameN > 0 {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := s.File.nextFrame(); err != nil {
+		log.Println(err)
+		return err
+	}
+	payloadType, frameN, framePeriod := s.File.Type, s.File.FrameN, s.File.FramePeriod
+	for _, tr := range s.tr {
+		packet := tr.Rtp.Packet(s.File.Data, payloadType, frameN, framePeriod)
+		_, err := tr.conn.Write(packet)
+		if err != nil {
+			log.Println(err)
+		}
+		// log.Println("packet", n, len(packet))
+	}
+	return nil
 }

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // RTSP main type
@@ -91,6 +92,7 @@ func (sv *RTSP) handShake(conn net.Conn) {
 	caught := false
 	for !caught {
 		req, resp, err := sv.parse(conn)
+		log.Println(req, resp, err)
 		if req == nil {
 			log.Println("Received a response:", resp)
 			return
@@ -193,63 +195,99 @@ func (sv *RTSP) handleSetup(conn net.Conn, req *Request) {
 	statusLine := sv.formatStatusLine(req.version, OK)
 	transport := sv.formatTransport(req.headers["Transport"])
 	headers := map[string]string{
-		"Server": *serverName, "Accept-Ranges": "npt",
-		"Media-Properties": "", "Transport": transport,
+		"Transport": transport,
 	}
+	// 	"Server": *serverName, "Accept-Ranges": "npt",
+	// 	"Media-Properties": "", "Transport": transport,
+	// }
 	if err := sv.sendResponse(conn, &req.Message, statusLine, "", headers); err != nil {
 		log.Println(err)
 		return
 	}
 	log.Println("session", session)
+	if err := session.File.Init(req.resource.Path); err != nil {
+		log.Println(err)
+		return
+	}
+	defer session.File.Close()
 	play, pause, teardown := make(chan bool), make(chan bool), make(chan bool)
+	eof := make(chan bool)
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		creq, cres := make(chan *Request), make(chan *Response)
+		resolveReq := func(req *Request) {
+			switch req.method {
+			case "PLAY":
+				sv.sendResponse(conn, &req.Message, statusLine, "", nil)
+				play <- true
+			case "PAUSE":
+				sv.sendResponse(conn, &req.Message, statusLine, "", nil)
+				pause <- true
+			case "TEARDOWN":
+				sv.sendResponse(conn, &req.Message, statusLine, "", nil)
+				teardown <- true
+				return
+			default:
+				break
+			}
+		}
+		resolveRes := func(resp *Response) {
+			if resp.status != 200 {
+				log.Println(*resp)
+				teardown <- true
+			}
+		}
 		for {
-			req, resp, err := sv.parse(conn)
-			if err != nil {
-				log.Println("handleSession goro 1:", err)
-				continue
-			}
-			if req != nil {
-				switch req.method {
-				case "PLAY":
-					play <- true
-				case "PAUSE":
-					pause <- true
-				case "TEARDOWN":
+			go func() {
+				req, resp, err := sv.parse(conn)
+				if err == nil {
+					if req != nil {
+						creq <- req
+					}
+					if resp != nil {
+						cres <- resp
+					}
+				} else {
+					log.Println(req, resp, err)
 					teardown <- true
-					return
-				default:
-					break
+					eof <- true
 				}
-			}
-			if resp != nil {
-				if resp.status != 200 {
-					log.Println(*resp)
-					teardown <- true
-				}
+				return
+			}()
+			select {
+			case <-eof:
+				return
+			case req := <-creq:
+				resolveReq(req)
+			case res := <-cres:
+				resolveRes(res)
 			}
 		}
 	}()
 	go func(send bool) {
 		defer wg.Done()
-	UDPLoop:
 		for {
 			select {
 			case <-play:
 				send = true
-				break
 			case <-pause:
 				send = false
 			case <-teardown:
-				break UDPLoop
+				return
 			default:
 				break
 			}
+
 			if send {
-				session.Send()
+				err := session.Send()
+				if err != nil {
+					log.Println("reached eof in file", req.resource.Path)
+					eof <- true
+					log.Println("retornou")
+					return
+				}
 			}
 		}
 	}(req.method == "PLAY")
@@ -275,9 +313,15 @@ func (sv *RTSP) parse(conn net.Conn) (*Request, *Response, error) {
 	i := 0
 	msgbody := false
 	version := VERSION
+	t := time.Now()
+	log.Println(t)
 	for s.Scan() {
 		line := s.Text()
-		log.Println("line:", line)
+		log.Println(line)
+		if line == "ENDOFFILE" {
+			log.Println("EOF")
+			break
+		}
 		if i == 0 && len(line) != 0 {
 			// Request: method uri version
 			// Response: version status-code phrase
