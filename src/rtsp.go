@@ -225,6 +225,8 @@ func (sv *RTSP) handleSetup(conn net.Conn, req *Request) {
 			case "PAUSE":
 				sv.sendResponse(conn, &req.Message, statusLine, "", nil)
 				pause <- true
+			case "DESCRIBE":
+				sv.handleDescribe(conn, req)
 			case "TEARDOWN":
 				sv.sendResponse(conn, &req.Message, statusLine, "", nil)
 				teardown <- true

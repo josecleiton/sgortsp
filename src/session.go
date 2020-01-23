@@ -1,10 +1,14 @@
 package sgortsp
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"strings"
@@ -92,7 +96,7 @@ func (s *Session) createID() error {
 	if _, err := rand.Read(data); err != nil {
 		return err
 	}
-	s.id = fmt.Sprintf("%x", sha256.Sum256(data))
+	s.id = fmt.Sprintf("%x", sha256.Sum256(data))[:32]
 	return nil
 }
 
@@ -208,11 +212,35 @@ func (s *Session) Send() error {
 	payloadType, frameN, framePeriod := s.File.Type, s.File.FrameN, s.File.FramePeriod
 	for _, tr := range s.tr {
 		packet := tr.Rtp.Packet(s.File.Data, payloadType, frameN, framePeriod)
-		_, err := tr.conn.Write(packet)
+		data, err := s.encodePacket(packet)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		n, err := tr.conn.Write(data)
 		if err != nil {
 			log.Println(err)
 		}
-		// log.Println("packet", n, len(packet))
+		log.Println("packet", n, len(data))
 	}
 	return nil
+}
+
+func (s *Session) encodePacket(packet []byte) ([]byte, error) {
+	block, err := aes.NewCipher([]byte(s.id))
+	if err != nil {
+		return nil, err
+	}
+	// packet64 := make([]byte, base64.StdEncoding.EncodedLen(len(packet)))
+	// base64.StdEncoding.Encode(packet64, packet)
+	encoded := make([]byte, aes.BlockSize+len(packet))
+	iv := encoded[:aes.BlockSize]
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return nil, err
+	}
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(encoded[aes.BlockSize:], packet)
+	packet64 := make([]byte, base64.StdEncoding.EncodedLen(len(encoded)))
+	base64.StdEncoding.Encode(packet64, encoded)
+	return packet64, nil
 }
