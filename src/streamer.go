@@ -31,9 +31,8 @@ func (s *Streamer) Init(path string) error {
 	return nil
 }
 
-func (s *Streamer) nextFrame() error {
-	_, err := s.file.Read(s.frameLen)
-	if err != nil {
+func (s *Streamer) NextFrame() error {
+	if _, err := s.file.Read(s.frameLen); err != nil {
 		return err
 	}
 	length, err := strconv.Atoi(string(s.frameLen))

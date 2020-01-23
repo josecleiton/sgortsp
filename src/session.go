@@ -18,7 +18,7 @@ import (
 type Session struct {
 	id, ip string
 	tr     []transport
-	File   Streamer
+	Streamer
 }
 
 type transport struct {
@@ -202,16 +202,16 @@ func (s *Session) parseDestAddr(destaddr string) []*net.UDPAddr {
 
 func (s *Session) Send() error {
 	// log.Println(s.tr)
-	if s.File.FrameN > 0 {
+	if s.FrameN > 0 {
 		time.Sleep(50 * time.Millisecond)
 	}
-	if err := s.File.nextFrame(); err != nil {
+	if err := s.NextFrame(); err != nil {
 		log.Println(err)
 		return err
 	}
-	payloadType, frameN, framePeriod := s.File.Type, s.File.FrameN, s.File.FramePeriod
+	payloadType, frameN, framePeriod := s.Type, s.FrameN, s.FramePeriod
 	for _, tr := range s.tr {
-		packet := tr.Rtp.Packet(s.File.Data, payloadType, frameN, framePeriod)
+		packet := tr.Rtp.Packet(s.Data, payloadType, frameN, framePeriod)
 		data, err := s.encodePacket(packet)
 		if err != nil {
 			log.Println(err)
@@ -243,4 +243,15 @@ func (s *Session) encodePacket(packet []byte) ([]byte, error) {
 	packet64 := make([]byte, base64.StdEncoding.EncodedLen(len(encoded)))
 	base64.StdEncoding.Encode(packet64, encoded)
 	return packet64, nil
+}
+
+func (s *Session) Close() {
+	log.Println(s.tr)
+	for _, t := range s.tr {
+		err := t.conn.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}
+	s.Streamer.Close()
 }

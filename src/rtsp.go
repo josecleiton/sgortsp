@@ -89,6 +89,7 @@ func (sv *RTSP) setupTLS() *tls.Config {
 
 func (sv *RTSP) handShake(conn net.Conn) {
 	// states
+	defer conn.Close()
 	caught := false
 	for !caught {
 		req, resp, err := sv.parse(conn)
@@ -114,6 +115,7 @@ func (sv *RTSP) handShake(conn net.Conn) {
 			log.Println(MethodNotAllowed)
 		}
 	}
+	log.Println("RETORNOU")
 }
 
 func (RTSP) formatMsgBody(res *routes.Resource) string {
@@ -205,11 +207,11 @@ func (sv *RTSP) handleSetup(conn net.Conn, req *Request) {
 		return
 	}
 	log.Println("session", session)
-	if err := session.File.Init(req.resource.Path); err != nil {
+	if err := session.Streamer.Init(req.resource.Path); err != nil {
 		log.Println(err)
 		return
 	}
-	defer session.File.Close()
+	defer session.Close()
 	play, pause, teardown := make(chan bool), make(chan bool), make(chan bool)
 	eof := make(chan bool)
 	var wg sync.WaitGroup
@@ -260,6 +262,8 @@ func (sv *RTSP) handleSetup(conn net.Conn, req *Request) {
 			}()
 			select {
 			case <-eof:
+				line := "TEARDOWN " + req.uri + " " + req.version
+				sv.sendResponse(conn, &req.Message, line, "", nil)
 				return
 			case req := <-creq:
 				resolveReq(req)
@@ -287,7 +291,6 @@ func (sv *RTSP) handleSetup(conn net.Conn, req *Request) {
 				if err != nil {
 					log.Println("reached eof in file", req.resource.Path)
 					eof <- true
-					log.Println("retornou")
 					return
 				}
 			}
