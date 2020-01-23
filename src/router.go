@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/josecleiton/sgortsp/src/routes"
 	"log"
+	"os/user"
 	"strings"
 )
 
@@ -13,6 +14,15 @@ type Router struct {
 
 func (r *Router) Init() {
 	r.routes = routes.Routes
+	u, err := user.Current()
+	for _, v := range r.routes {
+		if v.Path[0] == '~' {
+			if err != nil {
+				log.Fatalln("Failed to load current user info.", err)
+			}
+			v.Path = strings.Replace(v.Path, "~", u.HomeDir, 1)
+		}
+	}
 	log.Println("r.routes:", r.routes)
 }
 

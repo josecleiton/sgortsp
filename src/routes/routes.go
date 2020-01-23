@@ -10,7 +10,7 @@ type Resource struct {
 }
 
 var (
-	Routes = map[string]*Resource{"cade": &Resource{"/home/josec/out.mjpg",
+	Routes = map[string]*Resource{"cade": &Resource{"~/SI/RTSP-Client-Server/movie.Mjpeg",
 		[]PairString{{"v", "0"}},
 		[]PairString{},
 		[]PairString{{"m", "video %s RTP/AVP 26"}, {"a", "a=control:streamid=1234"}},
