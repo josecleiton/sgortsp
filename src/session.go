@@ -51,44 +51,32 @@ var (
 )
 
 func (s *Session) Init(a net.Addr, transp string) error {
-	var (
-		idError, connError error
-	)
 	remoteAddr, ok := a.(*net.TCPAddr)
 	if !ok {
 		return errors.New("Session init: malformed remoteaddr")
 	}
 	s.ip = remoteAddr.IP.String()
 	log.Println("session ip:", s.ip)
-	done := make(chan bool)
-	go func() {
-		idError = s.createID()
-		done <- true
-	}()
-	go func() {
-		// parse transport
-		// get ip:port
-		// set s.conn to that addr (use connError)
-		localAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+ServerPort)
-		if err != nil {
-			log.Println(err)
-		} else {
-			s.tr = s.ParseTransport(transp)
-			s.connectToTransport(localAddr, &s.tr)
-			log.Println("session:", *s)
-		}
-		connError = err
-		done <- true
-	}()
-	<-done
-	<-done
+	err := s.createID()
+	if err != nil {
+		return err
+	}
+	// parse transport
+	// get ip:port
+	// set s.conn to that addr (use connError)
+	localAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+ServerPort)
+	if err != nil {
+		log.Println(err)
+		return err
+	} else {
+		s.tr = s.ParseTransport(transp)
+		s.connectToTransport(localAddr, &s.tr)
+		log.Println("session:", *s)
+	}
 	if len(s.tr) == 0 {
 		return errors.New("None transport available")
 	}
-	if idError != nil {
-		return idError
-	}
-	return connError
+	return nil
 }
 
 func (s *Session) createID() error {
