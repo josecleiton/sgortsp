@@ -3,6 +3,10 @@ Simple Go RTSP Implementation
 
 # Usage
 
-## Generate TLS Certificates
+## convert mp4 to mjpg
 
-``` openssl req -x509 -nodes -newkey rsa:2048 -keyout server.rsa.key -out server.rsa.crt -days 3650 ```
+- `ffmpeg -i src.mp4 dest.mjpg`
+
+- use the util/converter.go to turn this into a 5 prefixed length mjpg: `go run converter.go src.mjpg dst.mjpg`
+
+ - put the file into `routes/routes.go`
