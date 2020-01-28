@@ -65,6 +65,7 @@ func (sv *RTSP) listen() {
 	defer ln.Close()
 	for {
 		conn, err := ln.Accept()
+		log.Println("New client!")
 		if err != nil {
 			log.Println(err)
 			continue
@@ -184,6 +185,7 @@ func (sv *RTSP) handleDescribe(conn net.Conn, req *Request) error {
 }
 
 func (sv *RTSP) handleSetup(conn net.Conn, req *Request) {
+	log.Println("CONN", conn)
 	session := Session{}
 	remoteAddr := conn.RemoteAddr()
 	if err := session.Init(remoteAddr, req.headers["Transport"]); err != nil {
@@ -210,6 +212,7 @@ func (sv *RTSP) handleSetup(conn net.Conn, req *Request) {
 		log.Println(err)
 		return
 	}
+	log.Println(session.Streamer)
 	defer session.Close()
 	play, pause, teardown := make(chan bool), make(chan bool), make(chan bool)
 	eof := make(chan bool)
@@ -231,8 +234,8 @@ func (sv *RTSP) handleSetup(conn net.Conn, req *Request) {
 			case "TEARDOWN":
 				sv.sendResponse(conn, &req.Message, statusLine, "", nil)
 				teardown <- true
-				return
 			default:
+				log.Println("MethodNotAllowed")
 				break
 			}
 		}
@@ -266,6 +269,9 @@ func (sv *RTSP) handleSetup(conn net.Conn, req *Request) {
 				return
 			case req := <-creq:
 				resolveReq(req)
+				if req.method == "TEARDOWN" {
+					return
+				}
 			case res := <-cres:
 				resolveRes(res)
 			}
@@ -303,7 +309,7 @@ func (RTSP) formatStatusLine(v string, phrase string) string {
 }
 
 func (RTSP) formatTransport(transp string) string {
-	return transp + ";server_port=" + ServerPort + ";mode=PLAY"
+	return transp + ";server_port=" + strconv.Itoa(ServerPort) + ";mode=PLAY"
 }
 
 func (sv *RTSP) parse(conn net.Conn) (*Request, *Response, error) {

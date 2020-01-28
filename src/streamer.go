@@ -48,6 +48,6 @@ func (s *Streamer) NextFrame() error {
 	return nil
 }
 
-func (s *Streamer) Close() {
-	s.file.Close()
+func (s *Streamer) Close() error {
+	return s.file.Close()
 }

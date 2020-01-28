@@ -11,7 +11,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,9 +36,8 @@ const (
 	transpMulticast
 )
 
-const (
-	ServerPort = "40400"
-)
+var ServerPort int = 40400
+var mutex sync.Mutex
 
 const (
 	play = iota + 1
@@ -64,7 +65,10 @@ func (s *Session) Init(a net.Addr, transp string) error {
 	// parse transport
 	// get ip:port
 	// set s.conn to that addr (use connError)
-	localAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+ServerPort)
+	mutex.Lock()
+	ServerPort++
+	mutex.Unlock()
+	localAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:"+strconv.Itoa(ServerPort))
 	if err != nil {
 		log.Println(err)
 		return err
@@ -189,10 +193,7 @@ func (s *Session) parseDestAddr(destaddr string) []*net.UDPAddr {
 }
 
 func (s *Session) Send() error {
-	// log.Println(s.tr)
-	if s.FrameN > 0 {
-		time.Sleep(50 * time.Millisecond)
-	}
+	time.Sleep(50 * time.Millisecond)
 	if err := s.NextFrame(); err != nil {
 		log.Println(err)
 		return err
@@ -205,7 +206,9 @@ func (s *Session) Send() error {
 			log.Println(err)
 			continue
 		}
+		log.Println("BEFORE SEND", tr, len(data))
 		n, err := tr.conn.Write(data)
+		log.Println("AFTER SEND")
 		if err != nil {
 			log.Println(err)
 		}
